@@ -1,0 +1,229 @@
+﻿trigger:
+  branches:
+    include:
+      - master
+      - feature/*  # Replace with your default branch name
+parameters:
+  - name: env
+    type: string
+    default: 'dev'
+    values:
+      - dev
+      - uat
+      - prod
+
+name: ${{ parameters.env }}-$(Date:yyyyMMdd)$(Rev:.r)
+
+variables:
+      - ${{ if eq(variables['Build.SourceBranchName'], 'master') }}:
+        - template: Infrabicep/Variables/Variable.${{ parameters.env }}.yml
+      - ${{ if startsWith(variables['Build.SourceBranchName'], 'feature') }}:
+        - template: Infrabicep/Variables/Variable.feature.yml
+
+
+pool:
+  vmImage: 'ubuntu-22.04'
+
+stages:
+
+# ---------------------------------------------------
+# Stage 1: Build & Package Code
+# ---------------------------------------------------
+- stage: Build
+  displayName: 'Build and Package Application'
+  jobs:
+    - job: BuildApp
+      displayName: 'Restore, Build .NET and Docker Login'
+      steps:
+        - checkout: self
+
+        - task: UseDotNet@2
+          displayName: 'Install .Net SDK'
+          inputs:
+            packageType: 'sdk'
+            version: '8.0.301'
+
+        - task: NuGetToolInstaller@1
+
+        - task: NuGetCommand@2
+          inputs:
+            restoreSolution: '**/*.sln'
+
+        - task: DotNetCoreCLI@2
+          displayName: 'Build .NET Project'
+          inputs:
+            command: 'build'
+            projects: '**/*.csproj'
+            arguments: '--configuration $(buildConfiguration)'
+
+# ---------------------------------------------------
+# Stage 2: Deploy Infrastructure
+# ---------------------------------------------------
+- stage: DeployInfrastructure
+  displayName: 'Deploy Azure Infrastructure'
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+    - job: DeployBicep
+      displayName: 'Deploy Azure Container Registry'
+      steps:
+        - checkout: self
+
+        - script: |
+            echo "Listing all files to verify Bicep path:"
+            find "$(Build.SourcesDirectory)"
+          displayName: 'List directory contents'
+
+        - task: AzureCLI@2
+          displayName: 'Deploy Bicep'
+          inputs:
+            azureSubscription: $(azureServiceConnection)
+            scriptType: pscore
+            scriptLocation: inlineScript
+            inlineScript: |
+              Write-Host "Creating resource group if needed..."
+              az group create --name $(resourceGroup) --location "$(location)"
+              az group create --name $(resourceGroupForACR) --location "$(location)"
+
+              Write-Host "Deploying Bicep file..."
+              az deployment group create `
+                --resource-group $(resourceGroupForACR) `
+                --template-file "$(Build.SourcesDirectory)/WebApplication3/Infrabicep/modules/acr.bicep" `
+                --parameters name=$(containerRegistry) `
+                --debug
+                             
+        - task: Docker@2
+          displayName: 'Login to ACR'
+          inputs:
+            command: 'login'
+            containerRegistry: $(containerRegistryServiceConnection)
+
+        - task: Docker@2
+          displayName: Build and Push Image to ACR
+          inputs:
+            containerRegistry: $(containerRegistryServiceConnection) # Replace with your service connection name
+            repository: $(repository)              # Image name (no registry URL)
+            command: 'buildAndPush'
+            Dockerfile: '**/Dockerfile'                 # Adjust path if needed
+            tags: |
+                $(imageTag)
+
+        # - task: AzureCLI@2
+        #   inputs:
+        #         azureSubscription: $(azureServiceConnection)
+        #         scriptType: 'bash'
+        #         scriptLocation: 'inlineScript'
+        #         inlineScript: |
+        #             echo "Assigning role..."
+        #             az role assignment create \
+        #             --assignee-object-id $TARGET_OBJECT_ID \
+        #             --role "$ROLE_NAME" \
+        #             --scope $TARGET_SCOPE
+
+        - task: AzureCLI@2
+          displayName: 'Deploy Azure Container Env'
+          inputs:
+            azureSubscription: $(azureServiceConnection)
+            scriptType: pscore
+            scriptLocation: inlineScript
+            inlineScript: |
+              Write-Host "Creating resource group if needed..."
+               az group create --name $(resourceGroup) --location "$(location)"
+
+               Write-Host $(containerAppName) 
+               Write-Host "Deploying Bicep file..."
+               az deployment group create `
+                --resource-group $(resourceGroupForACR) `
+                --template-file "$(Build.SourcesDirectory)/WebApplication3/Infrabicep/modules/containerAppEnv.bicep" `
+                --parameters name=$(containerAppEnvName) `
+                  location="$(location)" `
+                  containerAppName=$(containerAppName) `
+                --verbose
+
+       
+# ---------------------------------------------------
+# Stage 2: Deploy Infrastructure
+# ---------------------------------------------------
+- stage: DeployCode 
+  displayName: 'DeployCode'
+  dependsOn: DeployInfrastructure
+  condition: succeeded()
+  jobs:
+    - deployment: DeployContaninerApp
+      displayName: Deploy Contaniner App
+      environment: ${{ parameters.env }}
+      strategy: 
+       runOnce:
+        deploy:     
+         steps:
+         - checkout: self
+         - script: |
+            echo "Listing all files to verify Bicep path:"
+            find "$(Build.SourcesDirectory)"
+           displayName: 'List directory contents'
+
+         - task: AzureCLI@2
+           displayName: 'Deploy Container Apps Job Bicep'
+           inputs:
+                azureSubscription: $(azureServiceConnection)
+                scriptType: 'pscore'
+                scriptLocation: 'inlineScript'
+                inlineScript: |
+                    echo "Deploying Container Apps Job..."
+                        az deployment group create `
+                        --resource-group $(resourceGroup) `
+                        --template-file "$(Build.SourcesDirectory)/WebApplication3/Infrabicep/modules/AzureContainerJobs.bicep" `
+                        --parameters environmentName=$(containerAppEnvName) jobName=$(jobName) containerImage=$(containerRegistry).azurecr.io/$(imageName):$(imageTag)   containerEnvResourceGroup=$(resourceGroupForACR)
+      
+                        echo "Starting the Container Apps Job..."
+                        az containerapp job start --name $(jobName) --resource-group $(resourceGroup)
+         - task: AzureCLI@2
+           displayName: 'Create Azure Container App'
+           inputs:
+            azureSubscription: $(azureServiceConnection)
+            scriptType: pscore
+            scriptLocation: inlineScript
+            inlineScript: |
+              Write-Host "Creating resource group if needed..."
+               az group create --name $(resourceGroup) --location "$(location)"
+
+               Write-Host $(containerAppName) 
+               Write-Host $(containerRegistry).azurecr.io/$(imageName):$(imageTag)
+               Write-Host "Deploying Bicep file..."
+               az deployment group create `
+                --resource-group $(resourceGroup) `
+                --template-file "$(Build.SourcesDirectory)/WebApplication3/Infrabicep/main.bicep" `
+                --parameters containerAppName=$(containerAppName) `
+                  containerImage=$(containerRegistry).azurecr.io/$(imageName):$(imageTag) `
+                  uamiName=$(containerAppName)-uami `
+                  acrName=$(containerRegistry) `
+                  acrResourceGroup=$(resourceGroupForACR) `
+                  environmentName=$(containerAppEnvName) `
+                --verbose
+              $fqdn = az containerapp show `
+               --name $(containerAppName) `
+               --resource-group $(resourceGroup) `
+              --query properties.configuration.ingress.fqdn `
+              --output tsv
+
+                Write-Host "Container App FQDN: $fqdn"
+                Write-Host "##vso[task.setvariable variable=containerAppFqdn]$fqdn"
+         - task: AzureCLI@2
+           displayName: 'Check Container App Health'
+           inputs:
+             azureSubscription: $(azureServiceConnection)
+             scriptType: pscore
+             scriptLocation: inlineScript
+             inlineScript: |
+               $fqdn = "$(containerAppFqdn)"
+               Write-Host "Checking health at $fqdn ..."
+               $response = Invoke-WebRequest -Uri "https://$fqdn/api/health" -UseBasicParsing -TimeoutSec 30
+               if ($response.StatusCode -eq 200) {
+                  Write-Host "Health check passed: $($response.StatusCode)"
+               }
+               else {
+                Write-Error "Health check failed: Status code $($response.StatusCode)"
+                exit 1
+               }
+        
+      

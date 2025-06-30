@@ -1,0 +1,16 @@
+variables:
+  buildConfiguration: 'Release'
+  resourceGroup: 'rgFeature-dev'
+  resourceGroupForACR: 'acr-rg-dev'
+  location: 'East US'
+  containerRegistry: 'acrvipindev001'
+  containerRegistryServiceConnection: 'CommonConnectionToACR'
+  imageName: 'my-container-app-feature'
+  imageTag: '$(Build.BuildId)'
+  azureServiceConnection: 'ARMServiceConnection'
+  containerAppName: 'container-app-feature'
+  containerAppEnvName: 'container-env-dev'
+  repository: 'my-container-app-feature'  # Image name (no registry URL)
+  # TARGET_OBJECT_ID: 'dev-object-id'
+  # TARGET_SCOPE: '/subscriptions/your-subscription-id'
+  # ROLE_NAME: 'User Access Administrator'

@@ -1,0 +1,29 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UserSecretsId>87b01fc5-1391-43e3-a380-c2a5415f1fcf</UserSecretsId>
+    <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+  </PropertyGroup>
+
+
+  <ItemGroup>
+    <PackageReference Include="Azure.Identity" Version="1.14.0" />
+    <PackageReference Include="Azure.Messaging.EventHubs" Version="5.12.2" />
+    <PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.22.1-Preview.1" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Infra\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="..\.dockerignore">
+      <DependentUpon>Dockerfile</DependentUpon>
+    </None>
+  </ItemGroup>
+
+</Project>
